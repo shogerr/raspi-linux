@@ -19,6 +19,14 @@ config LEDS_TRIGGER_TIMER
 
 	  If unsure, say Y.
 
+config LEDS_TRIGGER_MORSE
+	tristate "LED Timer Morse"
+	depends on LEDS_TRIGGERS
+	help
+	  Blink the LEDs in morse code.
+
+	  If unsure, say Y.
+
 config LEDS_TRIGGER_ONESHOT
 	tristate "LED One-shot Trigger"
 	depends on LEDS_TRIGGERS
