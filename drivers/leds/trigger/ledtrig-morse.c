@@ -5,7 +5,6 @@
  *
  *
  */
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -14,58 +13,145 @@
 #include <linux/sched.h>
 #include <linux/sched/loadavg.h>
 #include <linux/leds.h>
+#include <linux/reboot.h>
 #include "../leds.h"
 
 static int panic_morse;
 
 struct morse_trig_data {
-	// fill out with stuff pertaining to 
-	// how the led should act
+	unsigned int phase;
+	unsigned int period;
+	struct timer_list timer;
+	unsigned int invert;
 };
 
-// this function ddtermines the state of the led and how long it will 
-// be on for
+/** this function ddtermines the state of the led and how long it will 
+ *  be on for
+ *
+ */ 
 static void led_morse_function(unsigned long data) {
+	struct led_classdev* led_cdev = (struct led_classdev*) data;
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
+	unsigned long brightness = LED_OFF;
+	unsigned long delay = 0;
 
+	if(unlikely(panic_morse)) {
+		led_set_brightness_nosleep(led_cdev, LED_OFF);
+		return;
+	}
+
+	if(test_and_clear_bit(LED_BLINK_BRIGHTNESS_CHANGE, &led_cdev->work_flags)) 
+		led_cdev->blink_brightness = led_cdev->new_blink_brightness;
+
+	/* just flicker between on and off for simple 
+	 * test`
+	 */
+	switch(morse_data->phase) {
+		case 0:
+			morse_data->period = 300;
+			morse_data->period = msecs_to_jiffies(morse_data->period);
+			
+			delay = msecs_to_jiffies(70);
+			morse_data->phase++;
+			if(!morse_data->invert)
+				brightness = led_cdev->blink_brightness;
+			break;
+		default:
+			delay = msecs_to_jiffies(370);
+
+			morse_data->phase = 0;
+			if(morse_data->invert)
+				brightness = led_cdev->blink_brightness;
+			break;
+	};
+
+	led_set_brightness_nosleep(led_cdev, brightness);
+	mod_timer(&morse_data->timer, jiffies + delay);
 }
 
-// learn what this does 
 static ssize_t led_invert_show(struct device* dev, struct device_attribute* attr, char* buf) {
-	return 0;
+	struct led_classdev* led_cdev = dev_get_drvdata(dev);
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
+
+	return sprintf(buf,"%u\n", morse_data->invert);
 }
 
-// same as above 	
 static ssize_t led_invert_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size) {
-	return 0;
+	struct led_classdev* led_cdev = dev_get_drvdata(dev);
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
+	
+	unsigned long state;
+	int ret;
+
+	ret = kstrtoul(buf, 0, &state);
+
+	if(ret)
+		return ret;
+
+	// !! - seems strange
+	morse_data->invert = !!state;
+
+	return size;
 }
 
 static DEVICE_ATTR(invert, 0644, led_invert_show, led_invert_store);
 
-// actually triggers the led_morse_function? (probably just copy)
 static void morse_trig_activate(struct led_classdev* led_cdev) {
+	struct morse_trig_data* morse_data;
+	int rc;
 
+	morse_data = kzalloc(sizeof(*morse_data), GFP_KERNEL);
+	if(!morse_data)
+		return;
+	
+	led_cdev->trigger_data = morse_data;
+	rc = device_create_file(led_cdev->dev, &dev_attr_invert);
+	if(rc) {
+		kfree(led_cdev->trigger_data);
+		return;
+	}
+
+	setup_timer(&morse_data->timer, led_morse_function, (unsigned long)led_cdev);
+	
+	// this will probably change as it seems like 
+	// this info is used to determine when the led is 
+	// to be on/off
+	morse_data->phase = 0;
+
+	if(!led_cdev->blink_brightness)
+		led_cdev->blink_brightness = led_cdev->max_brightness;
+
+	led_morse_function(morse_data->timer.data);
+	set_bit(LED_BLINK_SW, &led_cdev->work_flags);
+	led_cdev->activated = true;
 }
 
-// stop the led, (probably just copy)
-static void morse_trig_deactivate(struct led_classdef* led_cdev) {
+static void morse_trig_deactivate(struct led_classdev* led_cdev) {
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
 
+	if(led_cdev->activated) {
+		del_timer_sync(&morse_data->timer);
+		device_remove_file(led_cdev->dev, &dev_attr_invert);
+		kfree(morse_data);
+		clear_bit(LED_BLINK_SW, &led_cdev->work_flags);
+		led_cdev->activated = false;
+	}
 }
 
-// data for registering this driver
 static struct led_trigger morse_led_trigger = {
 	.name = "morse",
 	.activate = morse_trig_activate,
 	.deactivate = morse_trig_deactivate
 };
 
-// learn what this does
 static int morse_reboot_notifier(struct notifier_block* nb, unsigned long code, void* unused) {
-	return 0;
+	led_trigger_unregister(&morse_led_trigger);
+	return NOTIFY_DONE;
 }
 
-// learn what this does
 static int morse_panic_notifier(struct notifier_block* nb, unsigned long code, void* unused) {
-	return 0;
+	panic_morse = 1;
+	return NOTIFY_DONE;
 }
 
 static struct notifier_block morse_reboot_nb = {
@@ -76,18 +162,18 @@ static struct notifier_block morse_panic_nb = {
 	.notifier_call = morse_panic_notifier	
 };
 
-static int __init morse_trig_init() {
+static int __init morse_trig_init(void) {
 	int rc = led_trigger_register(&morse_led_trigger);
 
 	if(!rc) {
 		atomic_notifier_chain_register(&panic_notifier_list, &morse_panic_nb);
-		register_reboot_notifer(&morse_reboot_nb);
+		register_reboot_notifier(&morse_reboot_nb);
 	}
 	
 	return rc;
 }
 
-static void __exit morse_trig_exit() {
+static void __exit morse_trig_exit(void) {
 	unregister_reboot_notifier(&morse_reboot_nb);
 	atomic_notifier_chain_unregister(&panic_notifier_list, &morse_panic_nb);
 	led_trigger_unregister(&morse_led_trigger);
@@ -96,6 +182,6 @@ static void __exit morse_trig_exit() {
 module_init(morse_trig_init);
 module_exit(morse_trig_exit);
 
-MODULE_AUTHOR("Dakota Alton <altond@oregonstate.edu>");
+MODULE_AUTHOR("Dakota Alton, Ross Shoger");
 MODULE_DESCRIPTION("Morse LED Trigger");
 MODULE_LICENSE("GPL");

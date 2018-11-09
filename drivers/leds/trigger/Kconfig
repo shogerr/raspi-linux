@@ -60,7 +60,7 @@ config LEDS_TRIGGER_HEARTBEAT
 
 config LEDS_TRIGGER_MORSE
 	tristate "LED Morse Trigger"
-	depends on LED_TRIGGERS
+	depends on LEDS_TRIGGERS
 	help
 	  This flashed a morese encoded message via an LED
 	  If unsure, say Y.
