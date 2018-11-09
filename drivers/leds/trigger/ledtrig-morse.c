@@ -27,6 +27,11 @@ struct morse_trig_data {
 
 /** this function ddtermines the state of the led and how long it will 
  *  be on for
+ * 
+ * Standard Morse code is defined to use dahs that are 3 times longer than the dits. 
+ * The Space between dits and dahs is equal to the length of a dit
+ * The Space between characters is equal to the length of a dah (3 dits)
+ * The Space between words is twice the space between characters
  *
  */ 
 static void led_morse_function(unsigned long data) {
