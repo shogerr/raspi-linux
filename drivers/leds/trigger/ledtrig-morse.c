@@ -43,7 +43,7 @@ struct morse_trig_data {
 	// may have to change when it comes
 	// time to do project4
 	char message[10];	
-    unsigned int message_;
+	unsigned int message_;
 
 	// where in the message are we
 	const char* message_location;
@@ -81,8 +81,8 @@ static void led_morse_function(unsigned long data) {
 		goto update;
 	}
 
-	printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
-	printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
+	//printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
+	//printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
 
 	switch(*morse_data->morse_location) {
 	case '.':
@@ -168,8 +168,7 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	// this will probably change as it seems like 
 	// this info is used to determine when the led is 
 	// to be on/off
-	message = "sos";
-	printk(KERN_INFO "activatate 1 message: is %s\n", message);
+	message = "sos com";
 	dst = morse_data->message;
 	
 	for(src = message; *src != '\0'; src++) {
