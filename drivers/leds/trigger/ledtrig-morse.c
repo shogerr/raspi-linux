@@ -169,7 +169,7 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	// this info is used to determine when the led is 
 	// to be on/off
 	message = "sos";
-    printk(KERN_INFO "activatate 1 message: is %s\n", message);
+	printk(KERN_INFO "activatate 1 message: is %s\n", message);
 	dst = morse_data->message;
 	
 	for(src = message; *src != '\0'; src++) {
@@ -178,9 +178,9 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	}
 
 	*dst = '\0';
-    printk(KERN_INFO "activate 2 message is %s\n", morse_data->message);
+	printk(KERN_INFO "activate 2 message is %s\n", morse_data->message);
 
-    morse_data->phase = 0;
+	morse_data->phase = 0;
 	morse_data->message_location = morse_data->message;
 	morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
 
