@@ -69,55 +69,55 @@ static void led_morse_function(unsigned long data) {
 	struct led_classdev* led_cdev = (struct led_classdev*) data;
 	struct morse_trig_data* morse_data = led_cdev->trigger_data;
 
-    unsigned long brightness = LED_ON;
-    unsigned long delay = 0;
-    unsigned long dit = 200;
+	unsigned long brightness = LED_ON;
+	unsigned long delay = 0;
+	unsigned long dit = 200;
 
-    if (morse_data->phase == 1)
-    {
-        delay = dit;
-        brightness = LED_OFF;
-        morse_data->phase = 0;
-        goto update;
-    }
+	if (morse_data->phase == 1)
+	{
+		delay = dit;
+		brightness = LED_OFF;
+		morse_data->phase = 0;
+		goto update;
+	}
 
-    printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
-    printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
+	printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
+	printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
 
 	switch(*morse_data->morse_location) {
-		case '.':
-            delay = dit; 
-            morse_data->phase = 1;
-            morse_data->morse_location++;
-            break;
-		case '-':
-            delay = 3 * dit;
-            morse_data->phase = 1;
-			morse_data->morse_location++;
-            break;
-        default:
-            brightness = LED_OFF;
-            switch (*(morse_data->message_location+1))
-            {
-                case ' ':
-                    delay = 7 * dit;
-                    morse_data->message_location += 2;
-                    break;
-                case '\0':
-                    delay = 20 * dit;
-                    morse_data->message_location = morse_data->message;	
-                    break;
-                default:
-                    delay = 3 * dit;
-                    morse_data->message_location++;
-            };
+	case '.':
+		delay = dit; 
+		morse_data->phase = 1;
+		morse_data->morse_location++;
+		break;
+	case '-':
+		delay = 3 * dit;
+		morse_data->phase = 1;
+		morse_data->morse_location++;
+		break;
+	default:
+		brightness = LED_OFF;
+		switch (*(morse_data->message_location+1))
+		{
+		case ' ':
+			delay = 7 * dit;
+			morse_data->message_location += 2;
+			break;
+		case '\0':
+			delay = 20 * dit;
+			morse_data->message_location = morse_data->message;	
+			break;
+		default:
+			delay = 3 * dit;
+			morse_data->message_location++;
+		};
 
-            morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
+		morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
 	};
 
 update:
-    led_set_brightness_nosleep(led_cdev, brightness);
-    mod_timer(&morse_data->timer, jiffies + msecs_to_jiffies(delay));
+	led_set_brightness_nosleep(led_cdev, brightness);
+	mod_timer(&morse_data->timer, jiffies + msecs_to_jiffies(delay));
 }
 
 static ssize_t led_message_show(struct device* dev, struct device_attribute* attr, char* buf) {
