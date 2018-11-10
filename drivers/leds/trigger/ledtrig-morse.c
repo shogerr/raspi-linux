@@ -42,18 +42,17 @@ struct morse_trig_data {
 	// start with an 81 char message, 
 	// may have to change when it comes
 	// time to do project4
-	char message[81];	
+	char message[10];	
+    unsigned int message_;
 
 	// where in the message are we
-	char* message_location;
+	const char* message_location;
 	
 	// what part of the morse code are we at
-	char* morse_location;
+	const char* morse_location;
 
-	
-	unsigned int period;
+	unsigned int phase;
 	struct timer_list timer;
-	unsigned int invert;
 };
 
 /** this function ddtermines the state of the led and how long it will 
@@ -66,81 +65,69 @@ struct morse_trig_data {
  *
  */ 
 static void led_morse_function(unsigned long data) {
-	// dit and char-wise space
-	long dit = msecs_to_jiffies(70);
-	// dah and word-wise space
-	long dah = msecs_to_jiffies(3 * 70);
-
 
 	struct led_classdev* led_cdev = (struct led_classdev*) data;
 	struct morse_trig_data* morse_data = led_cdev->trigger_data;
-	unsigned long brightness = LED_OFF;
 
-	// time to next call of this function
-	unsigned long delay = 0;
+    unsigned long brightness = LED_ON;
+    unsigned long delay = 0;
+    unsigned long dit = 200;
 
-	if(unlikely(panic_morse)) {
-		led_set_brightness_nosleep(led_cdev, LED_OFF);
-		return;
-	}
+    if (morse_data->phase == 1)
+    {
+        delay = dit;
+        brightness = LED_OFF;
+        morse_data->phase = 0;
+        goto update;
+    }
 
-	if(test_and_clear_bit(LED_BLINK_BRIGHTNESS_CHANGE, &led_cdev->work_flags)) 
-		led_cdev->blink_brightness = led_cdev->new_blink_brightness;
+    printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
+    printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
 
-	/* just flicker between on and off for simple 
-	 * test`
-	 */
 	switch(*morse_data->morse_location) {
-		case '-':
-			morse_data->period = dah;
-			delay = dah;
-
-			morse_data->morse_location++;
-
-			if(!morse_data->invert)
-				brightness = led_cdev->blink_brightness;
-			break;
-
 		case '.':
-			morse_data->period = dit;
-			delay = dah;
-
+            delay = dit; 
+            morse_data->phase = 1;
+            morse_data->morse_location++;
+            break;
+		case '-':
+            delay = 3 * dit;
+            morse_data->phase = 1;
 			morse_data->morse_location++;
-			
-			if(morse_data->invert)
-				brightness = led_cdev->blink_brightness;
+            break;
+        default:
+            brightness = LED_OFF;
+            switch (*(morse_data->message_location+1))
+            {
+                case ' ':
+                    delay = 7 * dit;
+                    morse_data->message_location += 2;
+                    break;
+                case '\0':
+                    delay = 20 * dit;
+                    morse_data->message_location = morse_data->message;	
+                    break;
+                default:
+                    delay = 3 * dit;
+                    morse_data->message_location++;
+            };
 
-			break;
-
-		// morse_location = '\0', this also represents moving to a new word
-		default:
-			delay = 2 * dah;
-
-			morse_data->message_location++;
-			// check to see if we are at the last character in the message
-			if(*morse_data->message_location == '\0') 
-				morse_data->message_location = morse_data->message;	
-
-			morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
-
-			if(morse_data->invert)
-				brightness = led_cdev->blink_brightness;
-
-			break;
+            morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
 	};
 
-	led_set_brightness_nosleep(led_cdev, brightness);
-	mod_timer(&morse_data->timer, jiffies + delay);
+update:
+    led_set_brightness_nosleep(led_cdev, brightness);
+    mod_timer(&morse_data->timer, jiffies + msecs_to_jiffies(delay));
 }
 
-static ssize_t led_invert_show(struct device* dev, struct device_attribute* attr, char* buf) {
+static ssize_t led_message_show(struct device* dev, struct device_attribute* attr, char* buf) {
 	struct led_classdev* led_cdev = dev_get_drvdata(dev);
 	struct morse_trig_data* morse_data = led_cdev->trigger_data;
 
-	return sprintf(buf,"%u\n", morse_data->invert);
+	return sprintf(buf,"%u\n", morse_data->message_);
 }
 
-static ssize_t led_invert_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size) {
+static ssize_t led_message_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size) {
 	struct led_classdev* led_cdev = dev_get_drvdata(dev);
 	struct morse_trig_data* morse_data = led_cdev->trigger_data;
 
@@ -152,13 +139,12 @@ static ssize_t led_invert_store(struct device* dev, struct device_attribute* att
 	if(ret)
 		return ret;
 
-	// !! - seems strange
-	morse_data->invert = !!state;
+	morse_data->message_ = !!state;
 
 	return size;
 }
 
-static DEVICE_ATTR(invert, 0644, led_invert_show, led_invert_store);
+static DEVICE_ATTR(message, 0644, led_message_show, led_message_store);
 
 static void morse_trig_activate(struct led_classdev* led_cdev) {
 	struct morse_trig_data* morse_data;
@@ -171,7 +157,7 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 		return;
 
 	led_cdev->trigger_data = morse_data;
-	rc = device_create_file(led_cdev->dev, &dev_attr_invert);
+	rc = device_create_file(led_cdev->dev, &dev_attr_message);
 	if(rc) {
 		kfree(led_cdev->trigger_data);
 		return;
@@ -183,20 +169,20 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	// this info is used to determine when the led is 
 	// to be on/off
 	message = "sos";
+    printk(KERN_INFO "activatate 1 message: is %s\n", message);
 	dst = morse_data->message;
 	
-	for(src = message; src != '\0'; src++) {
+	for(src = message; *src != '\0'; src++) {
 		*dst = (*src);
 		dst++;
 	}
 
 	*dst = '\0';
+    printk(KERN_INFO "activate 2 message is %s\n", morse_data->message);
 
+    morse_data->phase = 0;
 	morse_data->message_location = morse_data->message;
 	morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
-
-	if(!led_cdev->blink_brightness)
-		led_cdev->blink_brightness = led_cdev->max_brightness;
 
 	led_morse_function(morse_data->timer.data);
 	set_bit(LED_BLINK_SW, &led_cdev->work_flags);
@@ -208,7 +194,7 @@ static void morse_trig_deactivate(struct led_classdev* led_cdev) {
 
 	if(led_cdev->activated) {
 		del_timer_sync(&morse_data->timer);
-		device_remove_file(led_cdev->dev, &dev_attr_invert);
+		device_remove_file(led_cdev->dev, &dev_attr_message);
 		kfree(morse_data);
 		clear_bit(LED_BLINK_SW, &led_cdev->work_flags);
 		led_cdev->activated = false;
