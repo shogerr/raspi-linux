@@ -23,6 +23,8 @@
 #include <linux/uaccess.h>
 #include <linux/types.h>
 #include <linux/ioctl.h>
+#include <linux/mutex.h>
+#include <linux/kfifo.h>
 
 #include "../leds.h"
 
@@ -33,6 +35,9 @@ static void led_morse_function(unsigned long data);
 
 static ssize_t led_speed_show(struct device* dev, struct device_attribute* attr, char* buf); 
 static ssize_t led_speed_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size); 
+
+static ssize_t led_do_repeat_show(struct device* dev, struct device_attribute* attr, char* buf);
+static ssize_t led_do_repeat_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size);
 
 static void morse_trig_activate(struct led_classdev* led_cdev);
 static void morse_trig_deactivate(struct led_classdev* led_cdev); 
@@ -70,6 +75,11 @@ static const char* CHAR_TO_MORSE[128] = {
 static int panic_morse;
 static char* message;
 
+#define FIFO_SIZE 64
+static DECLARE_KFIFO(message_fifo, unsigned char, FIFO_SIZE);
+
+static DEFINE_MUTEX(write_lock);
+
 struct morse_trig_data {
 	// how fast should the morse be rendered
 	unsigned int speed;
@@ -80,11 +90,15 @@ struct morse_trig_data {
 	// what part of the morse code are we at
 	const char* morse_location;
 
+	// should the message be repeated
+	unsigned int do_repeat;
+
 	unsigned int phase;
 	struct timer_list timer;
 };
 
 static DEVICE_ATTR(speed, 0644, led_speed_show, led_speed_store);
+static DEVICE_ATTR(do_repeat, 0644, led_do_repeat_show, led_do_repeat_store);
 
 static struct notifier_block morse_reboot_nb = {
 	.notifier_call = morse_reboot_notifier
@@ -112,6 +126,8 @@ static struct file_operations fops = {
 	.release = on_close
 };
 
+
+
 /** this function determines the state of the led and how long it will 
  *  be on for
  * 
@@ -130,6 +146,8 @@ static void led_morse_function(unsigned long data) {
 	unsigned long delay = 0;
 	unsigned long dit = morse_data->speed * 100;
 
+	char current_character;
+
 	if (morse_data->phase == 1)
 	{
 		delay = dit;
@@ -137,9 +155,6 @@ static void led_morse_function(unsigned long data) {
 		morse_data->phase = 0;
 		goto update;
 	}
-
-	//printk(KERN_INFO "letter is: %c\n", *morse_data->message_location);
-	//printk(KERN_INFO "morse is: %c\n", *morse_data->morse_location);
 
 	switch(*morse_data->morse_location) {
 	case '.':
@@ -162,7 +177,8 @@ static void led_morse_function(unsigned long data) {
 			break;
 		case '\0':
 			delay = 20 * dit;
-			morse_data->message_location = message;	
+			if(morse_data->do_repeat)
+				morse_data->message_location = message;	
 			break;
 		default:
 			delay = 3 * dit;
@@ -201,6 +217,31 @@ static ssize_t led_speed_store(struct device* dev, struct device_attribute* attr
 	return size;
 }
 
+static ssize_t led_do_repeat_show(struct device* dev, struct device_attribute* attr, char* buf) {
+	struct led_classdev* led_cdev = dev_get_drvdata(dev);
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
+
+	return sprintf(buf, "%u\n", morse_data->do_repeat);
+}
+
+static ssize_t led_do_repeat_store(struct device* dev, struct device_attribute* attr, const char* buf, size_t size) {
+	struct led_classdev* led_cdev = dev_get_drvdata(dev);
+	struct morse_trig_data* morse_data = led_cdev->trigger_data;
+
+	unsigned long state;
+	int ret;
+
+	ret = kstrtoul(buf, 0, &state);
+
+	if(ret)
+		return ret;
+
+	morse_data->do_repeat = state;
+
+	return size;
+
+}
+
 static void morse_trig_activate(struct led_classdev* led_cdev) {
 	struct morse_trig_data* morse_data;
 	int rc;
@@ -208,7 +249,9 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	int ret;
 	struct device* dev_ret;
 
-	// morse trigger
+	/**********************************************
+	 * morse trigger setup
+	 **********************************************/
 	morse_data = kzalloc(sizeof(*morse_data), GFP_KERNEL);
 	if(!morse_data)
 		return;
@@ -225,6 +268,7 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	// NOT IN USE 
 	message = "sos com";
 
+	morse_data->do_repeat = 0;
 	morse_data->phase = 0;
 	morse_data->speed = 1;
 	morse_data->message_location = message;
@@ -234,7 +278,9 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 	set_bit(LED_BLINK_SW, &led_cdev->work_flags);
 	led_cdev->activated = true;
 
-	// character device, should handle erros better (fail to activate this module?)
+	/********************************************
+	 * setup the character device
+	 ********************************************/
 	if((ret = alloc_chrdev_region(&dev, FIRST_MINOR, MINOR_CNT, "morse_chr_dev")) < 0) {
 		// fail
 	}
@@ -258,6 +304,11 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 		// fail
 	}
 
+
+	/*******************************************
+	 * setup the kfifo
+	 *******************************************/
+	INIT_KFIFO(message_fifo);
 }
 
 static void morse_trig_deactivate(struct led_classdev* led_cdev) {
@@ -305,19 +356,34 @@ static void __exit morse_trig_exit(void) {
 }
 
 static int on_open(struct inode* i, struct file* f) {
+	printk("morse character driver open!\r\n");
 	return 0;
 }
 
 static int on_close(struct inode* i, struct file* f) {
+	printk("morse character driver close!\r\n");
 	return 0;
 }
 
 static ssize_t on_read(struct file* f, char __user *buf, size_t size, loff_t* ppos) {
+	printk("morse character driver read\r\n");
+	snprintf(buf, size, "hello there");
 	return 0;
 }
 
 static ssize_t on_write(struct file* f, const char __user *buf, size_t size, loff_t* ppos) {
-	return 0;
+
+	int ret;
+	unsigned int copied;
+
+	if(mutex_lock_interruptible(&write_lock)) 
+		return -ERESTARTSYS;
+
+	ret = kfifo_from_user(&message_fifo, buf, size, &copied);
+
+	mutex_unlock(&write_lock);
+
+	return ret ? ret : copied;
 }
 
 module_init(morse_trig_init);
