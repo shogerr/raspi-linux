@@ -53,6 +53,7 @@ static int on_close(struct inode* i, struct file* f);
 static ssize_t on_read(struct file* f, char __user *buf, size_t size, loff_t* ppos);
 static ssize_t on_write(struct file* f, const char __user *buf, size_t size, loff_t* ppos);
 
+
 static const char* CHAR_TO_MORSE[128] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -73,20 +74,31 @@ static const char* CHAR_TO_MORSE[128] = {
 };
 
 static int panic_morse;
-static char* message;
 
-#define FIFO_SIZE 64
-static DECLARE_KFIFO(message_fifo, unsigned char, FIFO_SIZE);
 
 static DEFINE_MUTEX(write_lock);
+#define BUFFER_SIZE 16
+
+struct write_buffer {
+	char* data[BUFFER_SIZE];
+	int next_in, next_out;
+	int size;
+};
+
+static void buffer_put(struct write_buffer* wb, char* c);
+static char* buffer_get(struct write_buffer* wb);
+
 
 struct morse_trig_data {
 	// how fast should the morse be rendered
 	unsigned int speed;
 
+	// current message
+	char* message;
+
 	// where in the message are we
 	const char* message_location;
-	
+
 	// what part of the morse code are we at
 	const char* morse_location;
 
@@ -118,6 +130,9 @@ static dev_t dev;
 static struct cdev c_dev;
 static struct class* cl;
 
+
+static struct write_buffer message_buffer;
+
 static struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.open = on_open,
@@ -146,7 +161,35 @@ static void led_morse_function(unsigned long data) {
 	unsigned long delay = 0;
 	unsigned long dit = morse_data->speed * 100;
 
-	char current_character;
+
+	if(morse_data->message == 0) {
+		if(message_buffer.size) {
+			if(mutex_lock_interruptible(&write_lock)) {
+				// fail
+			
+				delay = dit;
+				brightness = LED_OFF;
+				goto update;
+
+			} else {
+				morse_data->message = buffer_get(&message_buffer);
+
+				// validate current string, should be done elsewhere
+
+				morse_data->message_location = morse_data->message;
+				morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
+			}
+
+
+			mutex_unlock(&write_lock);
+		} else {
+			// nothing todo
+			delay = dit;
+			brightness = LED_OFF;
+			goto update;
+		}
+	} 
+
 
 	if (morse_data->phase == 1)
 	{
@@ -157,35 +200,39 @@ static void led_morse_function(unsigned long data) {
 	}
 
 	switch(*morse_data->morse_location) {
-	case '.':
-		delay = dit; 
-		morse_data->phase = 1;
-		morse_data->morse_location++;
-		break;
-	case '-':
-		delay = 3 * dit;
-		morse_data->phase = 1;
-		morse_data->morse_location++;
-		break;
-	default:
-		brightness = LED_OFF;
-		switch (*(morse_data->message_location+1))
-		{
-		case ' ':
-			delay = 7 * dit;
-			morse_data->message_location += 2;
+		case '.':
+			delay = dit; 
+			morse_data->phase = 1;
+			morse_data->morse_location++;
 			break;
-		case '\0':
-			delay = 20 * dit;
-			if(morse_data->do_repeat)
-				morse_data->message_location = message;	
+		case '-':
+			delay = 3 * dit;
+			morse_data->phase = 1;
+			morse_data->morse_location++;
 			break;
 		default:
-			delay = 3 * dit;
-			morse_data->message_location++;
-		};
+			brightness = LED_OFF;
+			switch (*(morse_data->message_location+1))
+			{
+				case ' ':
+					delay = 7 * dit;
+					morse_data->message_location += 2;
+					break;
+				case '\0':
+					delay = 20 * dit; 
+					if(morse_data->do_repeat) {
+						morse_data->message_location = morse_data->message;
+					} else {
+						kfree(morse_data->message);
+						morse_data->message = 0;
+					}
+					break;
+				default:
+					delay = 3 * dit;
+					morse_data->message_location++;
+			};
 
-		morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
+			morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
 	};
 
 update:
@@ -245,7 +292,7 @@ static ssize_t led_do_repeat_store(struct device* dev, struct device_attribute* 
 static void morse_trig_activate(struct led_classdev* led_cdev) {
 	struct morse_trig_data* morse_data;
 	int rc;
-	
+
 	int ret;
 	struct device* dev_ret;
 
@@ -265,13 +312,11 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 
 	setup_timer(&morse_data->timer, led_morse_function, (unsigned long)led_cdev);
 
-	// NOT IN USE 
-	message = "sos com";
-
+	morse_data->message = 0;
 	morse_data->do_repeat = 0;
 	morse_data->phase = 0;
 	morse_data->speed = 1;
-	morse_data->message_location = message;
+	morse_data->message_location = 0;
 	morse_data->morse_location = CHAR_TO_MORSE[(int)(*morse_data->message_location)];
 
 	led_morse_function(morse_data->timer.data);
@@ -306,9 +351,12 @@ static void morse_trig_activate(struct led_classdev* led_cdev) {
 
 
 	/*******************************************
-	 * setup the kfifo
+	 * setup the buffer
 	 *******************************************/
-	INIT_KFIFO(message_fifo);
+	message_buffer.size = 0;
+	message_buffer.next_in = 0;
+	message_buffer.next_out = 0;
+	memset(message_buffer.data, 0, sizeof(message_buffer.data));
 }
 
 static void morse_trig_deactivate(struct led_classdev* led_cdev) {
@@ -373,18 +421,47 @@ static ssize_t on_read(struct file* f, char __user *buf, size_t size, loff_t* pp
 
 static ssize_t on_write(struct file* f, const char __user *buf, size_t size, loff_t* ppos) {
 
-	int ret;
-	unsigned int copied;
+	char* local;
+	local = 0;
 
-	if(mutex_lock_interruptible(&write_lock)) 
+	if(message_buffer.size == BUFFER_SIZE)
+		return 0;
+
+	local = kmalloc(size+1, GFP_KERNEL);
+
+	local[size + 1] = 0;
+
+	if(copy_from_user(local, buf, size)) {
+		return -EACCES;
+	}
+
+	if(mutex_lock_interruptible(&write_lock))
 		return -ERESTARTSYS;
 
-	ret = kfifo_from_user(&message_fifo, buf, size, &copied);
+	buffer_put(&message_buffer, local);
 
 	mutex_unlock(&write_lock);
 
-	return ret ? ret : copied;
+	return size;
 }
+
+static void buffer_put(struct write_buffer* wb, char* c) {
+	wb->data[wb->next_in] = c;
+	wb->size++;
+	wb->next_in = ((wb->next_in + 1) % BUFFER_SIZE); 
+}
+
+static char* buffer_get(struct write_buffer* wb) {
+	char* result;
+
+	result = wb->data[wb->next_out];
+	wb->size--;
+	wb->next_out = ((wb->next_out + 1)  % BUFFER_SIZE);
+
+	return result;
+}
+
+
 
 module_init(morse_trig_init);
 module_exit(morse_trig_exit);
