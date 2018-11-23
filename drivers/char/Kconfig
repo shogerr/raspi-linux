@@ -9,6 +9,12 @@ source "drivers/char/broadcom/Kconfig"
 
 source "drivers/tty/Kconfig"
 
+config ECHO_TEST
+	bool "test"
+	default y
+	help
+		Say Y
+
 config DEVMEM
 	bool "/dev/mem virtual device support"
 	default y
