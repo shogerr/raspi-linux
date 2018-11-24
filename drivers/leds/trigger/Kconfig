@@ -32,6 +32,12 @@ config LEDS_TRIGGER_ONESHOT
 	  It also shows how to use the led_blink_set_oneshot() function.
 
 	  If unsure, say Y.
+config LEDS_TRIGGER_MORSE
+	tristate "LED Morse Trigger"
+	depends on LEDS_TRIGGERS
+	help
+		This flashes a morse encoded message via an LED
+		if unsure, say Y
 
 config LEDS_TRIGGER_DISK
 	bool "LED Disk Trigger"
