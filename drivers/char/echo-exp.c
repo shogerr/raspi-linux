@@ -28,7 +28,7 @@ static struct timer_list timer;
 static DEFINE_MUTEX(lock);
 
 struct message_buffer {
-	char data[BUFFER_SIZE];
+	char* data[BUFFER_SIZE];
 
 	unsigned long size;
 	unsigned long next_in;
@@ -37,21 +37,21 @@ struct message_buffer {
 
 static struct message_buffer m_buf;
 
-static void buffer_write(struct message_buffer* buf, char c) {
+static void buffer_write(struct message_buffer* buf, char* c) {
 	buf->data[buf->next_in] = c;
 	buf->next_in = (buf->next_in + 1) % BUFFER_SIZE;
 	buf->size++;
 }
 
-static char buffer_read(struct message_buffer* buf) {
-	char result = buf->data[buf->next_out];
+static char* buffer_read(struct message_buffer* buf) {
+	char* result = buf->data[buf->next_out];
 	buf->next_out = (buf->next_out + 1)  % BUFFER_SIZE;
 	buf->size--;
 	return result;
 }
 
 static void echo_function(unsigned long data) {
-	char local;
+	char* local;
 	unsigned long delay = 70;
 
 	// printk("here\r\n");
@@ -65,7 +65,9 @@ static void echo_function(unsigned long data) {
 
 		mutex_unlock(&lock);
 
-		printk("Recv: %c\r\n", local);
+		printk("Recv: %s\r\n", local);
+
+		kfree(local);
 	}
 
 	delay = msecs_to_jiffies(delay);
@@ -89,23 +91,20 @@ static ssize_t echo_read(struct file* file, char __user *buf, size_t size, loff_
 }
 
 static ssize_t echo_write(struct file* file, const char __user *buf, size_t size, loff_t* ppos) {
-#if 0
-	char local[11];
-	unsigned long buf_size;
-	
-	
-	buf_size = sizeof(local);
-	memset(local, 0, buf_size);
+#if 1
+	char* local = kzalloc(size + 1, GFP_KERNEL);
 
-	printk("size: %ld, sizeof: %ld", size, buf_size - 1);
+	// printk("size: %ld, sizeof: %ld", size, size + 1);
 
-	if(copy_from_user(local, buf, min(size, buf_size - 1))) {
+	if(copy_from_user(local, buf, size)) {
 		return -EACCES;
 	}
 	
 	printk("Echo Driver Write %ld bytes: %s\r\n", size, local);
 
-	return min(size, buf_size - 1);
+	buffer_write(&m_buf, local);
+
+	return size;
 #else
 	char local = '*';
 
