@@ -26,22 +26,22 @@
 #define MINOR_CNT 1
 
 static const char* CHAR_TO_MORSE[128] = {
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, "-.-.--", ".-..-.", NULL, NULL, NULL, NULL, ".----.",
-	"-.--.", "-.--.-", NULL, NULL, "--..--", "-....-", ".-.-.-", "-..-.",
+	"*", "*", "*", "*", "*", "*", "*", "*",
+	"*", "*", "*", "*", "*", "*", "*", "*",
+	"*", "*", "*", "*", "*", "*", "*", "*",
+	"*", "*", "*", "*", "*", "*", "*", "*",
+	"*", "-.-.--", ".-..-.", "*", "*", "*", "*", ".----.",
+	"-.--.", "-.--.-", "*", "*", "--..--", "-....-", ".-.-.-", "-..-.",
 	"-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...",
-	"---..", "----.", "---...", NULL, NULL, "-...-", NULL, "..--..",
+	"---..", "----.", "---...", "*", "*", "-...-", "*", "..--..",
 	".--.-.", ".-", "-...", "-.-.", "-..", ".", "..-.", "--.",
 	"....", "..", ".---", "-.-", ".-..", "--", "-.", "---",
 	".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--",
-	"-..-", "-.--", "--..", NULL, NULL, NULL, NULL, "..--.-",
-	NULL, ".-", "-...", "-.-.", "-..", ".", "..-.", "--.",
+	"-..-", "-.--", "--..", "*", "*", "*", "*", "..--.-",
+	"*", ".-", "-...", "-.-.", "-..", ".", "..-.", "--.",
 	"....", "..", ".---", "-.-", ".-..", "--", "-.", "---",
 	".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--",
-	"-..-", "-.--", "--..", NULL, NULL, NULL, NULL, NULL
+	"-..-", "-.--", "--..", "*", "*", "*", "*", "*"
 };
 
 
@@ -107,6 +107,7 @@ static ssize_t my_read(struct file* file, char __user *buf, size_t size, loff_t*
 }
 
 static ssize_t my_write(struct file* file, const char __user *buf, size_t size, loff_t* ppos) {
+	int i;
 	char* local = kzalloc(size + 5, GFP_KERNEL);
 	if(!local) 
 		return 0;
@@ -127,8 +128,13 @@ static ssize_t my_write(struct file* file, const char __user *buf, size_t size, 
 	}
 	
 	printk("Echo Driver Write %ld bytes: %s\r\n", size, local);
-
 	local[size] = '\0';
+
+	for(i = 0; i < strlen(local); i++) {
+		if(local[i] >= 128 || local[i] < 0) 
+			local[i] = 0;
+	}
+
 	buffer_write(&m_buf, local);
 
 	mutex_unlock(&lock);
@@ -196,6 +202,12 @@ static void led_morse_function(unsigned long data) {
 
 	printk("before switch\r\n");
 	switch(*morse_data->morse_location) {
+		case '*':
+			printk("Invalid Characher\r\n");
+			delay = dit;
+			brightness = LED_OFF;
+			morse_data->phase = 0;
+			break;
 		case '.':
 			delay = dit;
 			morse_data->phase = 1;
