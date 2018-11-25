@@ -206,7 +206,8 @@ static void led_morse_function(unsigned long data) {
 			printk("Invalid Characher\r\n");
 			delay = dit;
 			brightness = LED_OFF;
-			morse_data->phase = 0;
+			morse_data->phase = 1;
+			morse_data->morse_location++;
 			break;
 		case '.':
 			delay = dit;
